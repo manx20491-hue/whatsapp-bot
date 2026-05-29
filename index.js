@@ -1,6 +1,7 @@
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
 const ytdl = require('ytdl-core');
 const fs = require('fs');
+const path = require('path');
 
 async function startBot() {
     const { state, saveCreds } = await useMultiFileAuthState('./auth');
@@ -40,38 +41,54 @@ async function startBot() {
         }
 
         if (cmd === 'menu') {
-            await sock.sendMessage(from, { text: '🤖 Bot Menu:\nhi\nmenu\nping\n.song <link>' });
+            await sock.sendMessage(from, { text: '🤖 Bot Menu:\nhi\nmenu\nping\n.song <yt link>' });
         }
 
         if (cmd === 'ping') {
             await sock.sendMessage(from, { text: 'pong 🏓' });
         }
 
-        // .song command
+        // FIXED .song command
         if (text.startsWith('.song')) {
-            const url = text.split(' ')[1];
+            const args = text.split(' ');
+            const url = args[1];
 
             if (!url || !ytdl.validateURL(url)) {
-                await sock.sendMessage(from, { text: '❌ Send valid YouTube link' });
+                await sock.sendMessage(from, { text: '❌ Send valid YouTube link\nExample: .song https://youtu.be/xxxx' });
                 return;
             }
 
+            const fileName = path.join(__dirname, `song_${Date.now()}.mp4`);
+
             try {
-                await sock.sendMessage(from, { text: '🎬 Downloading video...' });
+                await sock.sendMessage(from, { text: '🎬 Downloading video... please wait' });
 
-                const stream = ytdl(url, { filter: 'audioandvideo', quality: 'highest' });
+                const videoStream = ytdl(url, {
+                    filter: 'audioandvideo',
+                    quality: 'highest'
+                });
 
-                let chunks = [];
-                stream.on('data', c => chunks.push(c));
+                const writeStream = fs.createWriteStream(fileName);
+                videoStream.pipe(writeStream);
 
-                stream.on('end', async () => {
-                    const buffer = Buffer.concat(chunks);
-                    await sock.sendMessage(from, { video: buffer, caption: '🎬 Here is your video' });
+                writeStream.on('finish', async () => {
+                    const buffer = fs.readFileSync(fileName);
+
+                    await sock.sendMessage(from, {
+                        video: buffer,
+                        caption: '🎬 Here is your video'
+                    });
+
+                    fs.unlinkSync(fileName); // delete temp file
+                });
+
+                writeStream.on('error', async () => {
+                    await sock.sendMessage(from, { text: '❌ Download failed' });
                 });
 
             } catch (e) {
                 console.log(e);
-                await sock.sendMessage(from, { text: '❌ Failed to download video' });
+                await sock.sendMessage(from, { text: '❌ Failed to process video' });
             }
         }
     });
