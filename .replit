@@ -2,4 +2,6 @@ language = "nodejs-20"
 
 entrypoint = "index.js"
 
-run = "npm install && npm start"
+install = "npm install"
+
+run = "npm start"
