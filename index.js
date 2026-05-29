@@ -8,6 +8,11 @@ const QRCode = require('qrcode');
 const app = express();
 let latestQR = null;
 
+// HEALTH CHECK (Replit friendly)
+app.get('/health', (req, res) => {
+    res.send('OK');
+});
+
 app.get('/', (req, res) => {
     res.send(`
         <html>
@@ -15,13 +20,15 @@ app.get('/', (req, res) => {
         <body style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;font-family:sans-serif">
             <h2>WhatsApp Bot QR Code</h2>
             ${latestQR ? `<img src="${latestQR}" width="300" />` : '<p>Waiting for QR...</p>'}
+            <p>Keep this page open while connecting bot</p>
         </body>
         </html>
     `);
 });
 
-app.listen(3000, () => {
-    console.log('QR Web Preview running on port 3000');
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, "0.0.0.0", () => {
+    console.log('QR Web Preview running on port ' + PORT);
 });
 
 async function startBot() {
@@ -35,9 +42,14 @@ async function startBot() {
     sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
 
+        // Convert QR to web image
         if (qr) {
-            latestQR = await QRCode.toDataURL(qr);
-            console.log('QR updated for web view');
+            try {
+                latestQR = await QRCode.toDataURL(qr);
+                console.log('QR updated for web preview');
+            } catch (e) {
+                console.log('QR generation error', e);
+            }
         }
 
         if (connection === 'close') {
@@ -46,6 +58,7 @@ async function startBot() {
             if (shouldReconnect) startBot();
         } else if (connection === 'open') {
             console.log('WhatsApp Bot Connected Successfully');
+            latestQR = null;
         }
     });
 
