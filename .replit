@@ -1,14 +1,3 @@
-[nix]
-channel = "stable-24_05"
-
-deps = ["nodejs-20"]
-
 language = "nodejs-20"
 
-install = "npm install"
-
 run = "npm install && node index.js"
-
-[[ports]]
-localPort = 5000
-externalPort = 80
