@@ -7,6 +7,8 @@
   },
   "dependencies": {
     "@whiskeysockets/baileys": "latest",
-    "ytdl-core": "latest"
+    "ytdl-core": "latest",
+    "express": "latest",
+    "qrcode": "latest"
   }
 }
