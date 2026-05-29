@@ -1,3 +1,1 @@
-language = "nodejs-20"
-
 run = "npm install && node index.js"
