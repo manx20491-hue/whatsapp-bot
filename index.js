@@ -2,6 +2,27 @@ const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = requi
 const ytdl = require('ytdl-core');
 const fs = require('fs');
 const path = require('path');
+const express = require('express');
+const QRCode = require('qrcode');
+
+const app = express();
+let latestQR = null;
+
+app.get('/', (req, res) => {
+    res.send(`
+        <html>
+        <head><title>WhatsApp Bot QR</title></head>
+        <body style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;font-family:sans-serif">
+            <h2>WhatsApp Bot QR Code</h2>
+            ${latestQR ? `<img src="${latestQR}" width="300" />` : '<p>Waiting for QR...</p>'}
+        </body>
+        </html>
+    `);
+});
+
+app.listen(3000, () => {
+    console.log('QR Web Preview running on port 3000');
+});
 
 async function startBot() {
     const { state, saveCreds } = await useMultiFileAuthState('./auth');
@@ -11,8 +32,13 @@ async function startBot() {
         printQRInTerminal: true
     });
 
-    sock.ev.on('connection.update', (update) => {
-        const { connection, lastDisconnect } = update;
+    sock.ev.on('connection.update', async (update) => {
+        const { connection, lastDisconnect, qr } = update;
+
+        if (qr) {
+            latestQR = await QRCode.toDataURL(qr);
+            console.log('QR updated for web view');
+        }
 
         if (connection === 'close') {
             const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
@@ -48,13 +74,12 @@ async function startBot() {
             await sock.sendMessage(from, { text: 'pong 🏓' });
         }
 
-        // FIXED .song command
         if (text.startsWith('.song')) {
             const args = text.split(' ');
             const url = args[1];
 
             if (!url || !ytdl.validateURL(url)) {
-                await sock.sendMessage(from, { text: '❌ Send valid YouTube link\nExample: .song https://youtu.be/xxxx' });
+                await sock.sendMessage(from, { text: '❌ Send valid YouTube link' });
                 return;
             }
 
@@ -79,7 +104,7 @@ async function startBot() {
                         caption: '🎬 Here is your video'
                     });
 
-                    fs.unlinkSync(fileName); // delete temp file
+                    fs.unlinkSync(fileName);
                 });
 
                 writeStream.on('error', async () => {
