@@ -6,6 +6,7 @@
     "start": "node index.js"
   },
   "dependencies": {
-    "@whiskeysockets/baileys": "latest"
+    "@whiskeysockets/baileys": "latest",
+    "ytdl-core": "latest"
   }
 }
