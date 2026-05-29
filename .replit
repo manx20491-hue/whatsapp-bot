@@ -1,1 +1,5 @@
-run = "bash start.sh"
+language = "nodejs-20"
+
+install = "npm install"
+
+run = "npm start"
