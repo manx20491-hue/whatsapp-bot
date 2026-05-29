@@ -2,6 +2,10 @@
 
 This is a simple WhatsApp bot built using Baileys.
 
+## 🚀 Run on Replit (1 click)
+
+[![Run on Replit](https://replit.com/badge/github/manx20491-hue/whatsapp-bot)](https://replit.com/github/manx20491-hue/whatsapp-bot)
+
 ## Features
 - Auto reply
 - Simple commands
