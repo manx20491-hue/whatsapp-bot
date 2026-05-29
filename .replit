@@ -2,4 +2,8 @@ language = "nodejs-20"
 
 install = "npm install"
 
-run = "npm start"
+run = "node index.js"
+
+[[ports]]
+localPort = 5000
+externalPort = 80
