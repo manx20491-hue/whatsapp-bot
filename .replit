@@ -2,7 +2,7 @@ language = "nodejs-20"
 
 install = "npm install"
 
-run = "node index.js"
+run = "npm install && node index.js"
 
 [[ports]]
 localPort = 5000
