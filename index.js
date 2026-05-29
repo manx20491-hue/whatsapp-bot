@@ -7,8 +7,13 @@ const QRCode = require('qrcode');
 
 const app = express();
 let latestQR = null;
+let botStarted = false;
 
-// HEALTH CHECK (Replit friendly)
+// Ensure auth folder exists
+if (!fs.existsSync('./auth')) {
+    fs.mkdirSync('./auth');
+}
+
 app.get('/health', (req, res) => {
     res.send('OK');
 });
@@ -26,13 +31,15 @@ app.get('/', (req, res) => {
     `);
 });
 
-// FIX: Replit webview requires correct port handling
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, "0.0.0.0", () => {
     console.log('QR Web Preview running on port ' + PORT);
 });
 
 async function startBot() {
+    if (botStarted) return;
+    botStarted = true;
+
     const { state, saveCreds } = await useMultiFileAuthState('./auth');
 
     const sock = makeWASocket({
@@ -41,25 +48,28 @@ async function startBot() {
     });
 
     sock.ev.on('connection.update', async (update) => {
-        const { connection, lastDisconnect, qr } = update;
+        const { connection, lastDisconnect } = update;
+        const qr = update.qr;
 
-        // Convert QR to web image
         if (qr) {
             try {
                 latestQR = await QRCode.toDataURL(qr);
                 console.log('QR updated for web preview');
             } catch (e) {
-                console.log('QR generation error', e);
+                console.log('QR error', e);
             }
         }
 
+        if (connection === 'open') {
+            console.log('WhatsApp Bot Connected Successfully');
+            latestQR = null;
+        }
+
         if (connection === 'close') {
+            botStarted = false;
             const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
             console.log('Connection closed. Reconnecting:', shouldReconnect);
             if (shouldReconnect) startBot();
-        } else if (connection === 'open') {
-            console.log('WhatsApp Bot Connected Successfully');
-            latestQR = null;
         }
     });
 
