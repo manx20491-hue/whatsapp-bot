@@ -54,21 +54,16 @@ async function startBot() {
         if (qr) {
             try {
                 latestQR = await QRCode.toDataURL(qr);
-                console.log('QR updated for web preview');
-            } catch (e) {
-                console.log('QR error', e);
-            }
+            } catch (e) {}
         }
 
         if (connection === 'open') {
-            console.log('WhatsApp Bot Connected Successfully');
             latestQR = null;
         }
 
         if (connection === 'close') {
             botStarted = false;
             const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-            console.log('Connection closed. Reconnecting:', shouldReconnect);
             if (shouldReconnect) startBot();
         }
     });
@@ -98,6 +93,7 @@ async function startBot() {
             await sock.sendMessage(from, { text: 'pong 🏓' });
         }
 
+        // FIXED SONG COMMAND (NO FREEZE VERSION)
         if (text.startsWith('.song')) {
             const args = text.split(' ');
             const url = args[1];
@@ -109,36 +105,61 @@ async function startBot() {
 
             const fileName = path.join(__dirname, `song_${Date.now()}.mp4`);
 
-            try {
-                await sock.sendMessage(from, { text: '🎬 Downloading video... please wait' });
+            await sock.sendMessage(from, { text: '🎬 Downloading... please wait (max 60s)' });
 
-                const videoStream = ytdl(url, {
-                    filter: 'audioandvideo',
-                    quality: 'highest'
-                });
+            let finished = false;
 
-                const writeStream = fs.createWriteStream(fileName);
-                videoStream.pipe(writeStream);
+            const videoStream = ytdl(url, {
+                filter: 'audioandvideo',
+                quality: 'highest'
+            });
 
-                writeStream.on('finish', async () => {
+            const writeStream = fs.createWriteStream(fileName);
+
+            const timeout = setTimeout(async () => {
+                if (!finished) {
+                    finished = true;
+                    videoStream.destroy();
+                    writeStream.destroy();
+                    if (fs.existsSync(fileName)) fs.unlinkSync(fileName);
+                    await sock.sendMessage(from, { text: '❌ Download timed out' });
+                }
+            }, 60000);
+
+            videoStream.pipe(writeStream);
+
+            writeStream.on('finish', async () => {
+                if (finished) return;
+                finished = true;
+                clearTimeout(timeout);
+
+                try {
                     const buffer = fs.readFileSync(fileName);
-
                     await sock.sendMessage(from, {
                         video: buffer,
                         caption: '🎬 Here is your video'
                     });
-
                     fs.unlinkSync(fileName);
-                });
+                } catch (e) {
+                    await sock.sendMessage(from, { text: '❌ Error sending file' });
+                }
+            });
 
-                writeStream.on('error', async () => {
-                    await sock.sendMessage(from, { text: '❌ Download failed' });
-                });
+            writeStream.on('error', async () => {
+                if (finished) return;
+                finished = true;
+                clearTimeout(timeout);
+                await sock.sendMessage(from, { text: '❌ Download failed' });
+                if (fs.existsSync(fileName)) fs.unlinkSync(fileName);
+            });
 
-            } catch (e) {
-                console.log(e);
-                await sock.sendMessage(from, { text: '❌ Failed to process video' });
-            }
+            videoStream.on('error', async () => {
+                if (finished) return;
+                finished = true;
+                clearTimeout(timeout);
+                await sock.sendMessage(from, { text: '❌ YouTube blocked or unavailable' });
+                if (fs.existsSync(fileName)) fs.unlinkSync(fileName);
+            });
         }
     });
 }
