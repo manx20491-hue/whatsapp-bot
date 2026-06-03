@@ -1,4 +1,4 @@
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, downloadMediaMessage } = require('@whiskeysockets/baileys');
 const { Downloader: TikTokDownloader } = require('@tobyg74/tiktok-api-dl');
 const fs = require('fs');
 const path = require('path');
@@ -15,6 +15,13 @@ let botStarted = false;
 
 // Stores pending TikTok download requests: jid -> { url, videoUrl, audioUrl }
 const pendingTT = new Map();
+
+// Anti-delete: chats where it's enabled, and cache of recent messages
+const antidelChats = new Set();
+const messageCache = new Map(); // msgId -> { from, text, pushName, hasMedia, mediaType }
+
+// View-once cache: auto-download when view-once arrives so .vv can retrieve it
+const viewOnceCache = new Map(); // msgId -> { buffer, isImage }
 
 // Ensure auth folder exists
 if (!fs.existsSync('./auth')) {
@@ -123,11 +130,74 @@ async function startBot() {
     sock.ev.on('creds.update', saveCreds);
 
     sock.ev.on('messages.upsert', async (m) => {
+        // Scan ALL messages in the batch for view-once (before any null checks)
+        for (const scanMsg of m.messages) {
+            console.log('[SCAN] fromMe:', scanMsg.key.fromMe, '| hasMsg:', !!scanMsg.message, '| keys:', scanMsg.message ? Object.keys(scanMsg.message) : 'NULL', '| id:', scanMsg.key.id);
+            if (!scanMsg.message || !scanMsg.key.id) continue;
+            const rawMsg = scanMsg.message;
+            const voInner = rawMsg.viewOnceMessage?.message ||
+                            rawMsg.viewOnceMessageV2?.message ||
+                            rawMsg.viewOnceMessageV2Extension?.message ||
+                            rawMsg.ephemeralMessage?.message?.viewOnceMessage?.message ||
+                            rawMsg.ephemeralMessage?.message?.viewOnceMessageV2?.message;
+            const isDirectViewOnce = rawMsg.imageMessage?.viewOnce || rawMsg.videoMessage?.viewOnce;
+            if (voInner || isDirectViewOnce) {
+                console.log('[.vv] View-once FOUND! id:', scanMsg.key.id, '| topKey:', Object.keys(rawMsg)[0]);
+                try {
+                    let msgToDownload = scanMsg;
+                    try { msgToDownload = await sock.updateMediaMessage(scanMsg); } catch (_) {}
+                    const buffer = await downloadMediaMessage(msgToDownload, 'buffer', {}, {
+                        logger: undefined,
+                        reuploadRequest: sock.updateMediaMessage
+                    });
+                    const isImage = !!(voInner?.imageMessage || rawMsg.imageMessage);
+                    viewOnceCache.set(scanMsg.key.id, { buffer, isImage });
+                    if (viewOnceCache.size > 50) viewOnceCache.delete(viewOnceCache.keys().next().value);
+                    console.log('[.vv] Cached! id:', scanMsg.key.id, '| size:', viewOnceCache.size);
+                } catch (e) {
+                    console.error('[.vv] Download FAILED:', e.message);
+                }
+            }
+        }
+
         const msg = m.messages[0];
-        if (!msg.message || msg.key.fromMe) return;
+        if (!msg.message) return;
+
+        const from = msg.key.remoteJid;
+
+        // Anti-delete: WhatsApp sends deletions as a protocolMessage (type 0 = REVOKE)
+        if (msg.message.protocolMessage?.type === 0) {
+            try {
+                if (antidelChats.has(from)) {
+                    const deletedId = msg.message.protocolMessage?.key?.id;
+                    const cached = deletedId ? messageCache.get(deletedId) : null;
+                    if (cached) {
+                        await sock.sendMessage(from, {
+                            text: `🚫 *Anti-Delete Alert* 🚫\n\n👤 *From:* ${cached.pushName}\n💬 *Message:* ${cached.text}`
+                        });
+                        messageCache.delete(deletedId);
+                    }
+                }
+            } catch (e) {
+                console.error('Anti-delete error:', e);
+            }
+            return;
+        }
 
         const text = msg.message.conversation || msg.message.extendedTextMessage?.text;
-        const from = msg.key.remoteJid;
+
+        // Cache message for anti-delete (store text messages from others)
+        if (!msg.key.fromMe && msg.key.id && text) {
+            messageCache.set(msg.key.id, {
+                from,
+                text,
+                pushName: msg.pushName || 'Unknown'
+            });
+            // Keep cache under 500 entries
+            if (messageCache.size > 500) {
+                messageCache.delete(messageCache.keys().next().value);
+            }
+        }
 
         if (!text) return;
 
@@ -135,8 +205,19 @@ async function startBot() {
 
         const reply = (content) => sock.sendMessage(from, { text: content }, { quoted: msg });
 
-        if (cmd.includes('as salamu alaykum') || cmd.includes('assalamu alaykum') || cmd.includes('assalamualaikum') || cmd.includes('salam')) {
+        if (!msg.key.fromMe && (cmd.includes('as salamu alaykum') || cmd.includes('assalamu alaykum') || cmd.includes('assalamualaikum') || cmd.includes('salam'))) {
             await reply('Wa alaykum as salam wa rahmatullahi wa barakatuh. 🤍');
+            try {
+                const salamAudio = fs.readFileSync('./salam_reply.ogg');
+                await sock.sendMessage(from, {
+                    audio: salamAudio,
+                    mimetype: 'audio/ogg; codecs=opus',
+                    ptt: true,
+                    seconds: 30
+                }, { quoted: msg });
+            } catch (e) {
+                console.error('Salam audio send error:', e);
+            }
         }
 
         if (cmd === 'menu') {
@@ -180,6 +261,18 @@ async function startBot() {
 🌙 X BOT • Made with ❤️
 👑 Created by xman
 🇱🇰 Sri Lanka`;
+            await reply('Wa alaykum as salam wa rahmatullahi wa barakatuh. 🤍');
+            try {
+                const salamAudio = fs.readFileSync('./salam_reply.ogg');
+                await sock.sendMessage(from, {
+                    audio: salamAudio,
+                    mimetype: 'audio/ogg; codecs=opus',
+                    ptt: true,
+                    seconds: 30
+                });
+            } catch (e) {
+                console.error('Menu salam audio error:', e);
+            }
             await sock.sendMessage(from, {
                 image: fs.readFileSync('./menu.png'),
                 caption: menuText
@@ -188,6 +281,52 @@ async function startBot() {
 
         if (cmd === 'ping') {
             await reply('pong 🏓');
+        }
+
+        if (cmd === '.vv') {
+            const ctx = msg.message?.extendedTextMessage?.contextInfo;
+            const stanzaId = ctx?.stanzaId;
+
+            console.log('[.vv CMD] stanzaId:', stanzaId, '| cache keys:', [...viewOnceCache.keys()]);
+
+            if (!stanzaId) {
+                return reply('❌ Reply to a view once photo or video with .vv');
+            }
+
+            const cached = viewOnceCache.get(stanzaId);
+            if (!cached) {
+                return reply(`❌ View once media not found in cache.\n\nℹ️ Debug: looking for ID ${stanzaId}\nCache has ${viewOnceCache.size} item(s): ${[...viewOnceCache.keys()].join(', ') || 'none'}`);
+            }
+
+            try {
+                if (cached.isImage) {
+                    await sock.sendMessage(from, { image: cached.buffer, caption: '📸 *View Once Image — Saved*' });
+                } else {
+                    await sock.sendMessage(from, { video: cached.buffer, caption: '🎥 *View Once Video — Saved*' });
+                }
+                viewOnceCache.delete(stanzaId);
+            } catch (e) {
+                console.error('.vv send error:', e);
+                await reply('❌ Failed to send the saved media.');
+            }
+            return;
+        }
+
+        if (cmd === '.antidel on' || cmd === '.antidel off') {
+            const ownerNumber = '94720552037';
+            const senderNumber = from.replace(/[^0-9]/g, '').replace(/:\d+$/, '');
+            if (senderNumber !== ownerNumber && !msg.key.fromMe) {
+                await reply('⛔ Only the owner can use this command.');
+                return;
+            }
+            if (cmd === '.antidel on') {
+                antidelChats.add(from);
+                await reply('🛡️ Anti-Delete *ON* — deleted messages will be revealed.');
+            } else {
+                antidelChats.delete(from);
+                await reply('❌ Anti-Delete *OFF*');
+            }
+            return;
         }
 
         if (text.trim().toLowerCase().startsWith('.song')) {
